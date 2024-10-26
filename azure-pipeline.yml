@@ -25,6 +25,18 @@ stages:
         provider: 'azurerm'
         command: 'validate'
         workingDirectory: '$(System.DefaultWorkingDirectory)'
+    - task: Bash@3
+      inputs:
+        targetType: 'inline'
+        script: |
+          terraform show -json | tfsec --no-color
+      displayName: 'Run tfsec'
+    - task: Bash@3
+      inputs:
+        targetType: 'inline'
+        script: |
+          terraform show -json | infracost breakdown --path -
+      displayName: 'Estimate Costs'
 
 - stage: CD
   condition: and(succeeded(), not(startsWith(variables['Build.SourceBranch'], 'refs/pull/')))
@@ -56,4 +68,29 @@ stages:
               command: 'plan'
               workingDirectory: '$(System.DefaultWorkingDirectory)'
               environmentServiceNameAzureRM: 'Azure-Service-Connection'
-          - task
+          - task: ManualValidation@0
+            inputs:
+              notifyUsers: |
+                user@example.com
+              instructions: 'Please validate the Terraform plan'
+              onTimeout: 'reject'
+          - task: TerraformTaskV3@3
+            inputs:
+              provider: 'azurerm'
+              command: 'apply'
+              workingDirectory: '$(System.DefaultWorkingDirectory)'
+              environmentServiceNameAzureRM: 'Azure-Service-Connection'
+
+- stage: PostDeployment
+  condition: succeeded()
+  jobs:
+  - job: Verify
+    steps:
+    - task: AzureCLI@2
+      inputs:
+        azureSubscription: 'Azure-Service-Connection'
+        scriptType: 'bash'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          az monitor metrics list --resource $(azureResourceId) --metric "Percentage CPU"
+      displayName: 'Verify Deployment'
